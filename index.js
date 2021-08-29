@@ -59,8 +59,8 @@ function callJira() {
         summary: issue.summary,
         key: issue.key,
         name: issue.name,
+        estimation: issue.originalEstimate + 'd',
         time: issue.calculatedTime + 'd',
-        isDone: issue.isDone,
       }
 
       if (!acc[relevantType]) {
