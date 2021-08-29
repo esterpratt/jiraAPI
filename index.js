@@ -5,10 +5,11 @@ const fs = require("fs");
 const key = process.env.KEY;
 const sprintNumber = process.env.SPRINT;
 
-const url = `https://naturalintelligence.atlassian.net/rest/agile/1.0/sprint/${sprintNumber}/issue?fields=parent,summary,key,status,issuetype,labels,assignee,timetracking`;
+const url = `https://naturalintelligence.atlassian.net/rest/agile/1.0/sprint/${sprintNumber}/issue?fields=epic,parent,summary,key,status,issuetype,labels,assignee,timetracking`;
 
 const relevantTypes = { bug: 'bug', story: 'story', task: 'story', 'tech-debt': 'tech-debt', p1: 'p1', additional: 'additional' };
 const relevantLabels = ['tech-debt', 'p1', 'additional'];
+const stretchLabel = 'stretch';
 
 function callJira() {
   fetch(url, {
@@ -23,21 +24,26 @@ function callJira() {
     const { issues } = JSON.parse(res);
     const mappedIssues = issues.map(issue => {
       const { key, fields } = issue;
-      const { parent, summary, status, issuetype, labels, assignee, timetracking } = fields;
+      const { epic, parent, summary, issuetype, labels, assignee, timetracking } = fields;
       const { originalEstimate, timeSpent } = timetracking;
       let calculatedTime = 0;
       if (timeSpent) {
         calculatedTime = +timeSpent.slice(0, timeSpent.length - 1);
       }
 
-      const isDone = status.name === 'done';
+      const isStretch = labels.find(label => label === stretchLabel);
       const name = assignee ? assignee.displayName : 'N/A';
       let type = issuetype.name.toLowerCase();
 
-      const relevantLabel = labels.find(label => relevantLabels.find(l => label.includes(l)));
-      if (relevantLabel) type = relevantLabel;
+      const relevantLabel = labels.find(label => {
+        return relevantLabels.find(l => {
+          return label.toLowerCase().includes(l.toLowerCase())
+        })
+      });
 
-      return { type, parentKey: parent && parent.key, key, summary, name, originalEstimate, calculatedTime, isDone };
+      if (relevantLabel) type = relevantLabel.toLowerCase();
+
+      return { type, parentKey: parent && parent.key, epic: epic && epic.key, key, summary, name, originalEstimate, calculatedTime, isStretch };
     });
 
     mappedIssues.forEach(issue => {
@@ -59,8 +65,11 @@ function callJira() {
         summary: issue.summary,
         key: issue.key,
         name: issue.name,
-        estimation: issue.originalEstimate + 'd',
+        estimation: issue.originalEstimate,
+        comments: issue.isStretch ? 'stretch' : '',
+        estimatedDelivery: issue.isStretch ? 'Next sprint' : 'This sprint',
         time: issue.calculatedTime + 'd',
+        epic: issue.epic,
       }
 
       if (!acc[relevantType]) {
