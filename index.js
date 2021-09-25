@@ -1,14 +1,16 @@
 require('dotenv').config();
 
-const { fetchJson } = require('fetch-json'); const fastcsv = require('fast-csv'); const
-  fs = require('fs');
+const { fetchJson } = require('fetch-json');
+const fastcsv = require('fast-csv');
+const fs = require('fs');
 
 const url = `https://naturalintelligence.atlassian.net/rest/agile/1.0/sprint/${process.env.SPRINT}/issue?fields=epic,parent,summary,key,status,issuetype,labels,assignee,timetracking`;
 
 const relevantTypes = {
-  bug: 'bug', story: 'story', task: 'story', 'tech-debt': 'tech-debt', p1: 'p1', additional: 'additional',
-}; const relevantLabels = ['tech-debt', 'p1', 'additional']; const
-  stretchLabel = 'stretch';
+  bug: 'bug', story: 'story', task: 'story', 'tech-debt': 'tech-debt', p1: 'p1', additional: 'additional', unfinished: 'unfinished'
+};
+const relevantLabels = ['tech-debt', 'p1', 'additional', 'unfinished'];
+const stretchLabel = 'stretch';
 
 function createIssue(relevantLabel, issuetype, parent, epic, key, summary, assignee,
   originalEstimate, timeSpent, labels) {
