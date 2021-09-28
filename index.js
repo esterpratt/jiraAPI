@@ -4,13 +4,20 @@ const { fetchJson } = require('fetch-json');
 const fastcsv = require('fast-csv');
 const fs = require('fs');
 
-const url = `https://naturalintelligence.atlassian.net/rest/agile/1.0/sprint/${process.env.SPRINT}/issue?fields=epic,parent,summary,key,status,issuetype,labels,assignee,timetracking`;
+const getIssuesUrl = `https://naturalintelligence.atlassian.net/rest/agile/1.0/sprint/${process.env.SPRINT}/issue?maxResults=100&fields=epic,parent,summary,key,status,issuetype,labels,assignee,timetracking`;
+const getSprintUrl = `https://naturalintelligence.atlassian.net/rest/agile/1.0/sprint/${process.env.SPRINT}`;
 
 const relevantTypes = {
-  bug: 'bug', story: 'story', task: 'story', 'tech-debt': 'tech-debt', p1: 'p1', additional: 'additional', unfinished: 'unfinished'
+  bug: 'bug', story: 'story', task: 'story', 'tech-debt': 'tech-debt', p1: 'p1', additional: 'additional',
 };
-const relevantLabels = ['tech-debt', 'p1', 'additional', 'unfinished'];
+const relevantLabels = ['tech-debt', 'p1', 'additional'];
 const stretchLabel = 'stretch';
+const unfinishedLabel = 'unfinished';
+const PLANNING = 'planning';
+const SPRINT_REPORT = 'report';
+
+let reportType = PLANNING;
+let totalTime = 0;
 
 function createIssue(relevantLabel, issuetype, parent, epic, key, summary, assignee,
   originalEstimate, timeSpent, labels) {
@@ -59,9 +66,53 @@ function writeIssuesToCsv(issuesByType) {
   });
 }
 
-function main() {
-  fetchJson.get(url, {},
+function getReportType() {
+  return fetchJson.get(getSprintUrl, {},
     { headers: { Authorization: `Basic ${Buffer.from(process.env.KEY).toString('base64')}` } })
+  .then((res) => {
+    const now = new Date();
+    if (new Date(res.completeDate) < now) {
+      return SPRINT_REPORT;
+    }
+    return PLANNING;
+  })
+}
+
+function getFinalIssue(issue) {
+  if (reportType === SPRINT_REPORT) {
+    const time = issue.calculatedTime;
+    return {
+      summary: issue.summary,
+      key: issue.key,
+      name: issue.name,
+      time: `${time}d`,
+      percentage: `${Math.round(time / totalTime * 100)}%`,
+      comments: issue.isStretch ? 'stretch' : '',
+      epic: issue.epic,
+    }
+  }
+  return {
+    summary: issue.summary,
+    key: issue.key,
+    name: issue.name,
+    estimation: issue.originalEstimate,
+    comments: issue.isStretch ? 'stretch' : '',
+    estimatedDelivery: issue.isStretch ? 'Next sprint' : 'This sprint',
+    epic: issue.epic,
+  };
+}
+
+function getTotalTime(issues) {
+  return issues.reduce((acc, issue) => {
+    return acc + issue.calculatedTime;
+  }, 0);
+}
+
+function main() {
+  getReportType().then(res => {
+    reportType = res;
+    fetchJson.get(getIssuesUrl, {},
+      { headers: { Authorization: `Basic ${Buffer.from(process.env.KEY).toString('base64')}` } })
     .then((res) => {
       const { issues } = res;
       const mappedIssues = mapIssues(issues);
@@ -72,26 +123,22 @@ function main() {
         }
       });
 
+      if (reportType === SPRINT_REPORT) {
+        totalTime = getTotalTime(mappedIssues);
+      }
+
       const issuesByType = mappedIssues.reduce((acc, issue) => {
         const { type } = issue;
         const relevantType = relevantTypes[type];
         if (!relevantType) return acc;
-        const finalIssue = {
-          summary: issue.summary,
-          key: issue.key,
-          name: issue.name,
-          estimation: issue.originalEstimate,
-          comments: issue.isStretch ? 'stretch' : '',
-          estimatedDelivery: issue.isStretch ? 'Next sprint' : 'This sprint',
-          time: `${issue.calculatedTime}d`,
-          epic: issue.epic,
-        };
-          // eslint-disable-next-line no-unused-expressions
+        const finalIssue = getFinalIssue(issue);
+        // eslint-disable-next-line no-unused-expressions
         acc[relevantType] ? acc[relevantType].push(finalIssue) : acc[relevantType] = [finalIssue];
         return acc;
       }, {});
       writeIssuesToCsv(issuesByType);
     });
+  });
 }
 
 main();
