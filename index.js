@@ -4,15 +4,15 @@ const { fetchJson } = require('fetch-json');
 const fastcsv = require('fast-csv');
 const fs = require('fs');
 
-const getIssuesUrl = `https://naturalintelligence.atlassian.net/rest/agile/1.0/sprint/${process.env.SPRINT}/issue?maxResults=100&fields=epic,parent,summary,key,status,issuetype,labels,assignee,timetracking`;
 const getSprintUrl = `https://naturalintelligence.atlassian.net/rest/agile/1.0/sprint/${process.env.SPRINT}`;
+const getIssuesUrl = `${getSprintUrl}/issue?maxResults=100&fields=epic,parent,summary,key,status,issuetype,labels,assignee,timetracking`;
 
 const relevantTypes = {
   bug: 'bug', story: 'story', task: 'story', 'tech-debt': 'tech-debt', p1: 'p1', additional: 'additional',
 };
 const relevantLabels = ['tech-debt', 'p1', 'additional'];
 const stretchLabel = 'stretch';
-const unfinishedLabel = 'unfinished';
+// const unfinishedLabel = 'unfinished';
 const PLANNING = 'planning';
 const SPRINT_REPORT = 'report';
 
@@ -41,10 +41,8 @@ function mapIssues(issues) {
       epic, parent, summary, issuetype: issueType, labels, assignee, timetracking,
     } = fields;
     const { originalEstimate, timeSpent } = timetracking;
-    const relevantLabel = labels.find((label) => relevantLabels.find((l) => label.toLowerCase()
-      .includes(l.toLowerCase())));
-    return createIssue(relevantLabel, issueType, parent, epic, key, summary, assignee,
-      originalEstimate, timeSpent, labels);
+    const relevantLabel = labels.find((label) => relevantLabels.find((l) => label.toLowerCase().includes(l.toLowerCase())));
+    return createIssue(relevantLabel, issueType, parent, epic, key, summary, assignee, originalEstimate, timeSpent, labels);
   });
 }
 
@@ -55,27 +53,21 @@ function writeIssuesToCsv(issuesByType) {
       return;
     }
     Object.keys(issuesByType).forEach((type) => {
-      const arrayToPrint = issuesByType[type]; const
-        ws = fs.createWriteStream(`export/${type}.csv`);
-      fastcsv.write(arrayToPrint, { headers: true }).on('finish', () => {
-        console.info(`Write ${type} to CSV successfully!`);
-      }).on('error', (err) => {
-        console.error(`ERROR:${err}`);
-      }).pipe(ws);
+      const arrayToPrint = issuesByType[type];
+      const ws = fs.createWriteStream(`export/${type}.csv`);
+      fastcsv.write(arrayToPrint, { headers: true }).on('finish', () => console.info(`Write ${type} to CSV successfully!`))
+        .on('error', (error) => console.error(`ERROR: ${error}`))
+        .pipe(ws);
     });
   });
 }
 
 function getReportType() {
   return fetchJson.get(getSprintUrl, {},
-    { headers: { Authorization: `Basic ${Buffer.from(process.env.KEY).toString('base64')}` } })
-  .then((res) => {
-    const now = new Date();
-    if (new Date(res.completeDate) < now) {
-      return SPRINT_REPORT;
-    }
+    { headers: { Authorization: `Basic ${Buffer.from(process.env.KEY).toString('base64')}` } }).then((res) => {
+      if (new Date(res.completeDate) < new Date()) return SPRINT_REPORT;
     return PLANNING;
-  })
+    });
 }
 
 function getFinalIssue(issue) {
@@ -86,10 +78,10 @@ function getFinalIssue(issue) {
       key: issue.key,
       name: issue.name,
       time: `${time}d`,
-      percentage: `${Math.round(time / totalTime * 100)}%`,
+      percentage: `${Math.round((time / totalTime) * 100)}%`,
       comments: issue.isStretch ? 'stretch' : '',
       epic: issue.epic,
-    }
+    };
   }
   return {
     summary: issue.summary,
@@ -103,13 +95,11 @@ function getFinalIssue(issue) {
 }
 
 function getTotalTime(issues) {
-  return issues.reduce((acc, issue) => {
-    return acc + issue.calculatedTime;
-  }, 0);
+  return issues.reduce((acc, issue) => acc + issue.calculatedTime, 0);
 }
 
 function main() {
-  getReportType().then(res => {
+  getReportType().then((res) => {
     reportType = res;
     fetchJson.get(getIssuesUrl, {},
       { headers: { Authorization: `Basic ${Buffer.from(process.env.KEY).toString('base64')}` } })
