@@ -1,20 +1,25 @@
 require('dotenv').config();
-
-const { fetchJson } = require('fetch-json');
-const fastcsv = require('fast-csv');
 const fs = require('fs');
+const fastcsv = require('fast-csv');
+const { fetchJson } = require('fetch-json');
 
-const getIssuesUrl = `https://naturalintelligence.atlassian.net/rest/agile/1.0/sprint/${process.env.SPRINT}/issue?maxResults=100&fields=epic,parent,summary,key,status,issuetype,labels,assignee,timetracking`;
-const getSprintUrl = `https://naturalintelligence.atlassian.net/rest/agile/1.0/sprint/${process.env.SPRINT}`;
+const baseUrl = 'https://naturalintelligence.atlassian.net/rest/agile/1.0/sprint/';
+
+// TODO: get fields from outside
+const fields = ['epic', 'parent', 'summary', 'key', 'status', 'issuetype', 'labels', 'assignee', 'timetracking'];
 
 const relevantTypes = {
   bug: 'bug', story: 'story', task: 'story', 'tech-debt': 'tech-debt', p1: 'p1', additional: 'additional',
 };
 const relevantLabels = ['tech-debt', 'p1', 'additional'];
-const stretchLabel = 'stretch';
-const unfinishedLabel = 'unfinished';
+const STRETCH = 'stretch';
 const PLANNING = 'planning';
 const SPRINT_REPORT = 'report';
+const SUB_TASK = 'sub-task';
+const UNFINISHED = 'unfinished';
+
+const sprintUrl = `${baseUrl}${process.env.SPRINT}`;
+const issuesUrl = `${baseUrl}${process.env.SPRINT}/issue?maxResults=100&fields=${fields}`;
 
 let reportType = PLANNING;
 let totalTime = 0;
@@ -30,7 +35,7 @@ function createIssue(relevantLabel, issuetype, parent, epic, key, summary, assig
     name: assignee ? assignee.displayName : 'N/A',
     originalEstimate,
     calculatedTime: timeSpent ? +timeSpent.slice(0, timeSpent.length - 1) : 0,
-    isStretch: labels.find((label) => label === stretchLabel),
+    isStretch: labels.find((label) => label === STRETCH),
   };
 }
 
@@ -41,8 +46,8 @@ function mapIssues(issues) {
       epic, parent, summary, issuetype: issueType, labels, assignee, timetracking,
     } = fields;
     const { originalEstimate, timeSpent } = timetracking;
-    const relevantLabel = labels.find((label) => relevantLabels.find((l) => label.toLowerCase()
-      .includes(l.toLowerCase())));
+    const relevantLabel = relevantLabels.find((label) => labels.find((l) => l.toLowerCase()
+      .includes(label.toLowerCase())));
     return createIssue(relevantLabel, issueType, parent, epic, key, summary, assignee,
       originalEstimate, timeSpent, labels);
   });
@@ -67,7 +72,7 @@ function writeIssuesToCsv(issuesByType) {
 }
 
 function getReportType() {
-  return fetchJson.get(getSprintUrl, {},
+  return fetchJson.get(sprintUrl, {},
     { headers: { Authorization: `Basic ${Buffer.from(process.env.KEY).toString('base64')}` } })
   .then((res) => {
     const now = new Date();
@@ -111,13 +116,15 @@ function getTotalTime(issues) {
 function main() {
   getReportType().then(res => {
     reportType = res;
-    fetchJson.get(getIssuesUrl, {},
+    fetchJson.get(issuesUrl, {},
       { headers: { Authorization: `Basic ${Buffer.from(process.env.KEY).toString('base64')}` } })
     .then((res) => {
       const { issues } = res;
       const mappedIssues = mapIssues(issues);
+
+      // add sub-tasks log work to its parent log work
       mappedIssues.forEach((issue) => {
-        if (issue.type === 'sub-task') {
+        if (issue.type === SUB_TASK) {
           const parentIssue = mappedIssues.find((i) => i.key === issue.parentKey);
           if (parentIssue) parentIssue.calculatedTime += issue.calculatedTime;
         }
@@ -132,10 +139,10 @@ function main() {
         const relevantType = relevantTypes[type];
         if (!relevantType) return acc;
         const finalIssue = getFinalIssue(issue);
-        // eslint-disable-next-line no-unused-expressions
         acc[relevantType] ? acc[relevantType].push(finalIssue) : acc[relevantType] = [finalIssue];
         return acc;
       }, {});
+
       writeIssuesToCsv(issuesByType);
     });
   });
