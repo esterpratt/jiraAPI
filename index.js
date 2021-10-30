@@ -2,12 +2,10 @@ require('dotenv').config();
 const fs = require('fs');
 const fastcsv = require('fast-csv');
 const { fetchJson } = require('fetch-json');
+const readline = require('readline');
 
 const baseUrl = 'https://naturalintelligence.atlassian.net/rest/agile/1.0/sprint/';
-
-// TODO: get fields from outside
-const fields = ['epic', 'parent', 'summary', 'key', 'status', 'issuetype', 'labels', 'assignee', 'timetracking'];
-
+const possibleFields = ['epic', 'parent', 'summary', 'key', 'status', 'issuetype', 'labels', 'assignee', 'timetracking'];
 const relevantTypes = {
   bug: 'bug', story: 'story', task: 'story', 'tech-debt': 'tech-debt', p1: 'p1', additional: 'additional',
 };
@@ -18,10 +16,6 @@ const SPRINT_REPORT = 'report';
 const SUB_TASK = 'sub-task';
 const UNFINISHED = 'unfinished';
 
-const sprintUrl = `${baseUrl}${process.env.SPRINT}`;
-const issuesUrl = `${baseUrl}${process.env.SPRINT}/issue?maxResults=100&fields=${fields}`;
-
-let reportType = PLANNING;
 let totalTime = 0;
 
 function createIssue(relevantLabel, issuetype, parent, epic, key, summary, assignee,
@@ -69,15 +63,39 @@ function writeIssuesToCsv(issuesByType) {
   });
 }
 
-function getReportType() {
-  return fetchJson.get(sprintUrl, {},
-    { headers: { Authorization: `Basic ${Buffer.from(process.env.KEY).toString('base64')}` } }).then((res) => {
-      if (new Date(res.completeDate) < new Date()) return SPRINT_REPORT;
-    return PLANNING;
-    });
+function askQuestion(question) {
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  })
+
+  return new Promise(resolve => {
+    return rl.question(question, ans => {
+        rl.close();
+        resolve(ans);
+      })
+    }
+  )
 }
 
-function getFinalIssue(issue) {
+async function getReportType() {
+  const ans = await askQuestion('What report to you want to get? Sprint report (S) or Planning report (P)? ');
+  if (ans === 'S') {
+    return SPRINT_REPORT;
+  } else {
+    return PLANNING;
+  }
+}
+
+function getSprintNumber() {
+  if (process.env.SPRINT) {
+    return Promise.resolve(process.env.SPRINT);
+  } else {
+    return askQuestion('Please enter Sprint number: ');
+  }
+}
+
+function getFinalIssue(issue, reportType) {
   if (reportType === SPRINT_REPORT) {
     const time = issue.calculatedTime;
     return {
@@ -96,7 +114,7 @@ function getFinalIssue(issue) {
     name: issue.name,
     estimation: issue.originalEstimate,
     comments: issue.isStretch ? 'stretch' : '',
-    estimatedDelivery: issue.isStretch ? 'Next sprint' : 'This sprint',
+    estimatedDelivery: issue.isStretch ? 'Next Sprint' : 'This Sprint',
     epic: issue.epic,
   };
 }
@@ -105,39 +123,50 @@ function getTotalTime(issues) {
   return issues.reduce((acc, issue) => acc + issue.calculatedTime, 0);
 }
 
-function main() {
-  getReportType().then((res) => {
-    reportType = res;
-    fetchJson.get(issuesUrl, {},
-      { headers: { Authorization: `Basic ${Buffer.from(process.env.KEY).toString('base64')}` } })
-    .then((res) => {
-      const { issues } = res;
-      const mappedIssues = mapIssues(issues);
+function buildUrl(sprintNumber, fields) {
+  return `${baseUrl}${sprintNumber}/issue?maxResults=100&fields=${fields}`;
+}
 
-      // add sub-tasks log work to its parent log work
-      mappedIssues.forEach((issue) => {
-        if (issue.type === SUB_TASK) {
-          const parentIssue = mappedIssues.find((i) => i.key === issue.parentKey);
-          if (parentIssue) parentIssue.calculatedTime += issue.calculatedTime;
-        }
-      });
+async function main() {
+  const reportType = await getReportType();
+  const sprintNumber = await getSprintNumber();
+  const issuesUrl = buildUrl(sprintNumber, possibleFields);
 
-      if (reportType === SPRINT_REPORT) {
-        totalTime = getTotalTime(mappedIssues);
-      }
+  const { issues } = await fetchJson.get(
+    issuesUrl,
+    {},
+    { headers: { Authorization: `Basic ${Buffer.from(process.env.KEY).toString('base64')}` } },
+  );
 
-      const issuesByType = mappedIssues.reduce((acc, issue) => {
-        const { type } = issue;
-        const relevantType = relevantTypes[type];
-        if (!relevantType) return acc;
-        const finalIssue = getFinalIssue(issue);
-        acc[relevantType] ? acc[relevantType].push(finalIssue) : acc[relevantType] = [finalIssue];
-        return acc;
-      }, {});
+  if (!issues) {
+    console.log('Sorry! No such Sprint. Please check the number and try again.')
+    return;
+  }
 
-      writeIssuesToCsv(issuesByType);
-    });
+  const mappedIssues = mapIssues(issues);
+
+  // add sub-tasks log work to its parent log work
+  mappedIssues.forEach((issue) => {
+    if (issue.type === SUB_TASK) {
+      const parentIssue = mappedIssues.find((i) => i.key === issue.parentKey);
+      if (parentIssue) parentIssue.calculatedTime += issue.calculatedTime;
+    }
   });
+
+  if (reportType === SPRINT_REPORT) {
+    totalTime = getTotalTime(mappedIssues);
+  }
+
+  const issuesByType = mappedIssues.reduce((acc, issue) => {
+    const { type } = issue;
+    const relevantType = relevantTypes[type];
+    if (!relevantType) return acc;
+    const finalIssue = getFinalIssue(issue, reportType);
+    acc[relevantType] ? acc[relevantType].push(finalIssue) : acc[relevantType] = [finalIssue];
+    return acc;
+  }, {});
+
+  writeIssuesToCsv(issuesByType);
 }
 
 main();
