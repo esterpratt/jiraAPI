@@ -16,8 +16,6 @@ const SPRINT_REPORT = 'report';
 const SUB_TASK = 'sub-task';
 const UNFINISHED = 'unfinished';
 
-let totalTime = 0;
-
 function createIssue(relevantLabel, issuetype, parent, epic, key, summary, assignee,
   originalEstimate, timeSpent, labels) {
   return {
