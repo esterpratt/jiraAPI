@@ -47,6 +47,12 @@ function mapIssues(issues) {
   });
 }
 
+function getSortedIssuesByEpic(issues) {
+  return issues.sort((a, b) => {
+    return (a.epic || '').localeCompare(b.epic)
+  });
+}
+
 function writeIssuesToCsv(issuesByType) {
   fs.mkdir('export', { recursive: true }, (err) => {
     if (err) {
@@ -54,9 +60,10 @@ function writeIssuesToCsv(issuesByType) {
       return;
     }
     Object.keys(issuesByType).forEach((type) => {
-      const arrayToPrint = issuesByType[type];
+      const issues = issuesByType[type];
+      const sortedIssues = getSortedIssuesByEpic(issues);
       const ws = fs.createWriteStream(`export/${type}.csv`);
-      fastcsv.write(arrayToPrint, { headers: true }).on('finish', () => console.info(`Write ${type} to CSV successfully!`))
+      fastcsv.write(sortedIssues, { headers: true }).on('finish', () => console.info(`Write ${type} to CSV successfully!`))
         .on('error', (error) => console.error(`ERROR: ${error}`))
         .pipe(ws);
     });
@@ -95,19 +102,20 @@ function getSprintNumber() {
   }
 }
 
-function getFinalIssue(issue, reportType) {
-  if (reportType === SPRINT_REPORT) {
-    const time = issue.calculatedTime;
-    return {
-      summary: issue.summary,
-      key: issue.key,
-      name: issue.name,
-      time: `${time}d`,
-      percentage: `${Math.round((time / totalTime) * 100)}%`,
-      comments: issue.isStretch ? 'stretch' : '',
-      epic: issue.epic,
-    };
-  }
+function getSprintIssue(issue, totalTime) {
+  const time = issue.calculatedTime;
+  return {
+    summary: issue.summary,
+    key: issue.key,
+    name: issue.name,
+    time: `${time}d`,
+    percentage: `${Math.round((time / totalTime) * 100)}%`,
+    comments: issue.isStretch ? 'stretch' : '',
+    epic: issue.epic,
+  };
+}
+
+function getPlanningIssue(issue) {
   return {
     summary: issue.summary,
     key: issue.key,
@@ -119,8 +127,28 @@ function getFinalIssue(issue, reportType) {
   };
 }
 
+function getFinalIssue(issue, reportType, totalTime) {
+  if (reportType === SPRINT_REPORT) return getSprintIssue(issue, totalTime);
+  else return getPlanningIssue(issue);
+}
+
 function getTotalTime(issues) {
   return issues.reduce((acc, issue) => acc + issue.calculatedTime, 0);
+}
+
+function getIssuesByType(issues, reportType) {
+  let totalTime = 0;
+  if (reportType === SPRINT_REPORT) {
+    totalTime = getTotalTime(issues);
+  }
+  return issues.reduce((acc, issue) => {
+    const { type } = issue;
+    const relevantType = relevantTypes[type];
+    if (!relevantType) return acc;
+    const finalIssue = getFinalIssue(issue, reportType, totalTime);
+    acc[relevantType] ? acc[relevantType].push(finalIssue) : acc[relevantType] = [finalIssue];
+    return acc;
+  }, {});
 }
 
 function buildUrl(sprintNumber, fields) {
@@ -153,18 +181,7 @@ async function main() {
     }
   });
 
-  if (reportType === SPRINT_REPORT) {
-    totalTime = getTotalTime(mappedIssues);
-  }
-
-  const issuesByType = mappedIssues.reduce((acc, issue) => {
-    const { type } = issue;
-    const relevantType = relevantTypes[type];
-    if (!relevantType) return acc;
-    const finalIssue = getFinalIssue(issue, reportType);
-    acc[relevantType] ? acc[relevantType].push(finalIssue) : acc[relevantType] = [finalIssue];
-    return acc;
-  }, {});
+  const issuesByType = getIssuesByType(mappedIssues, reportType);
 
   writeIssuesToCsv(issuesByType);
 }
