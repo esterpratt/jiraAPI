@@ -1,5 +1,5 @@
 require('dotenv').config();
-const fs = require('fs');
+const fs = require('fs-extra');
 const fastcsv = require('fast-csv');
 const { fetchJson } = require('fetch-json');
 const readline = require('readline');
@@ -14,6 +14,7 @@ const STRETCH = 'stretch';
 const PLANNING = 'planning';
 const SPRINT_REPORT = 'report';
 const SUB_TASK = 'sub-task';
+const NOT_FOR_REPORT = 'not-for-report';
 const UNFINISHED = 'unfinished';
 
 function createIssue(relevantLabel, issuetype, parent, epic, key, summary, assignee,
@@ -21,7 +22,7 @@ function createIssue(relevantLabel, issuetype, parent, epic, key, summary, assig
   return {
     type: relevantLabel ? relevantLabel.toLowerCase() : issuetype.name.toLowerCase(),
     parentKey: parent && parent.key,
-    epic: epic && epic.key,
+    epic: epic && `${epic.key} - ${epic.summary}`,
     key,
     summary,
     name: assignee ? assignee.displayName : 'N/A',
@@ -39,7 +40,7 @@ function mapIssues(issues) {
     } = fields;
     const { originalEstimate, timeSpent } = timetracking;
     const relevantLabel = relevantLabels.find((label) => labels.find((l) => l.toLowerCase()
-      .includes(label.toLowerCase())));
+    .includes(label.toLowerCase())));
     return createIssue(relevantLabel, issueType, parent, epic, key, summary, assignee,
       originalEstimate, timeSpent, labels);
   });
@@ -51,20 +52,38 @@ function getSortedIssuesByEpic(issues) {
   });
 }
 
-function writeIssuesToCsv(issuesByType) {
-  fs.mkdir('export', { recursive: true }, (err) => {
+function arrangeIssues(issues, reportType, totalTime) {
+  return issues.map(issue => getFinalIssue(issue, reportType, totalTime));
+}
+
+function writeIssuesToCsv(issuesByType, reportType, totalTime) {
+  fs.ensureDir('export', { recursive: true }, (err) => {
     if (err) {
       console.error(err);
       return;
     }
     Object.keys(issuesByType).forEach((type) => {
       const issues = issuesByType[type];
-      const sortedIssues = getSortedIssuesByEpic(issues);
+      const arrangedIssues = arrangeIssues(issues, reportType, totalTime);
+      const sortedIssues = getSortedIssuesByEpic(arrangedIssues);
       const ws = fs.createWriteStream(`export/${type}.csv`);
       fastcsv.write(sortedIssues, { headers: true }).on('finish', () => console.info(`Write ${type} to CSV successfully!`))
         .on('error', (error) => console.error(`ERROR: ${error}`))
         .pipe(ws);
     });
+  });
+}
+
+function writeAdditionalDataToCsv(additionalSprintData) {
+  fs.ensureDir('export', { recursive: true }, (err) => {
+    if (err) {
+      console.error(err);
+      return;
+    }
+    const ws = fs.createWriteStream(`export/additionalData.csv`);
+    fastcsv.write(additionalSprintData, {headers: true}).on('finish', () => console.info(`Write additional data to CSV successfully!`))
+    .on('error', (error) => console.error(`ERROR: ${error}`))
+    .pipe(ws);
   });
 }
 
@@ -100,6 +119,10 @@ function getSprintNumber() {
   }
 }
 
+function getTimePercentages(time, totalTime) {
+  return Math.round((time / totalTime) * 100);
+}
+
 function getSprintIssue(issue, totalTime) {
   const time = issue.calculatedTime;
   return {
@@ -107,7 +130,7 @@ function getSprintIssue(issue, totalTime) {
     key: issue.key,
     name: issue.name,
     time: `${time}d`,
-    percentage: `${Math.round((time / totalTime) * 100)}%`,
+    percentage: `${getTimePercentages(time, totalTime)}%`,
     comments: issue.isStretch ? 'stretch' : '',
     epic: issue.epic,
   };
@@ -134,23 +157,48 @@ function getTotalTime(issues) {
   return issues.reduce((acc, issue) => acc + issue.calculatedTime, 0);
 }
 
-function getIssuesByType(issues, reportType) {
-  let totalTime = 0;
-  if (reportType === SPRINT_REPORT) {
-    totalTime = getTotalTime(issues);
-  }
+function getIssuesByType(issues) {
   return issues.reduce((acc, issue) => {
     const { type } = issue;
     const relevantType = relevantTypes[type];
     if (!relevantType) return acc;
-    const finalIssue = getFinalIssue(issue, reportType, totalTime);
-    acc[relevantType] ? acc[relevantType].push(finalIssue) : acc[relevantType] = [finalIssue];
+    acc[relevantType] ? acc[relevantType].push(issue) : acc[relevantType] = [issue];
     return acc;
   }, {});
 }
 
 function buildUrl(sprintNumber, fields) {
   return `${baseUrl}${sprintNumber}/issue?maxResults=100&fields=${fields}`;
+}
+
+function filterIssues(issues) {
+  return issues.filter(issue => {
+    const { fields: { labels } } = issue;
+    const shouldNotReport = labels.find((label) => label === NOT_FOR_REPORT);
+    return !shouldNotReport;
+  })
+}
+
+function getIssuesTime(issues) {
+  return issues.reduce((acc, issue) => {
+    return acc + issue.calculatedTime;
+  }, 0);
+}
+
+function getAdditionalSprintData(issues, reportType, totalTime) {
+  const totalUnplannedTaskDays = getIssuesTime(issues.additional, totalTime);
+  const totalTechDebtTaskDays = getIssuesTime(issues['tech-debt'], totalTime);
+  const totalTechDebtInPercentage = getTimePercentages(totalTechDebtTaskDays, totalTime);
+  const totalBugsAndP1sTaskDays = getIssuesTime([...issues.bug, ...issues.p1], totalTime);
+  const totalBugsAndP1sInPercentage = getTimePercentages(totalBugsAndP1sTaskDays, totalTime);
+
+  return [{
+    totalDevDays: `${totalTime.toFixed(1)}d`,
+    unplannedTaskDays: `${totalUnplannedTaskDays}d`,
+    techDebtPercentage: `${totalTechDebtInPercentage}%`,
+    bugsAndP1sPercentage: `${totalBugsAndP1sInPercentage}%`,
+    productTasksPercentage: `${100 - totalTechDebtInPercentage - totalBugsAndP1sInPercentage}%`,
+  }];
 }
 
 async function main() {
@@ -169,7 +217,9 @@ async function main() {
     return;
   }
 
-  const mappedIssues = mapIssues(issues);
+  const issuesForReport = filterIssues(issues);
+
+  const mappedIssues = mapIssues(issuesForReport);
 
   // add sub-tasks log work to its parent log work
   mappedIssues.forEach((issue) => {
@@ -179,9 +229,20 @@ async function main() {
     }
   });
 
-  const issuesByType = getIssuesByType(mappedIssues, reportType);
+  let totalTime = 0;
+  if (reportType === SPRINT_REPORT) {
+    totalTime = getTotalTime(mappedIssues);
+  }
 
-  writeIssuesToCsv(issuesByType);
+  const issuesByType = getIssuesByType(mappedIssues, reportType, totalTime);
+
+  let additionalSprintData;
+  if (reportType === SPRINT_REPORT) {
+    additionalSprintData = getAdditionalSprintData(issuesByType, reportType, totalTime);
+  }
+
+  writeIssuesToCsv(issuesByType, reportType, totalTime);
+  writeAdditionalDataToCsv(additionalSprintData);
 }
 
 main();
