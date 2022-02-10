@@ -104,19 +104,13 @@ function askQuestion(question) {
 
 async function getReportType() {
   const ans = await askQuestion('What report to you want to get? Sprint report (S) or Planning report (P)? ');
-  if (ans === 'S') {
-    return SPRINT_REPORT;
-  } else {
-    return PLANNING;
-  }
+  if (ans === 'S') return SPRINT_REPORT;
+  return PLANNING;
 }
 
 function getSprintNumber() {
-  if (process.env.SPRINT) {
-    return Promise.resolve(process.env.SPRINT);
-  } else {
-    return askQuestion('Please enter Sprint number: ');
-  }
+  if (process.env.SPRINT) return Promise.resolve(process.env.SPRINT);
+  return askQuestion('Please enter Sprint number: ');
 }
 
 function getTimePercentages(time, totalTime) {
@@ -179,7 +173,7 @@ function filterIssues(issues) {
   })
 }
 
-function getIssuesTime(issues) {
+function getIssuesTime(issues = []) {
   return issues.reduce((acc, issue) => {
     return acc + issue.calculatedTime;
   }, 0);
@@ -189,7 +183,9 @@ function getAdditionalSprintData(issues, reportType, totalTime) {
   const totalUnplannedTaskDays = getIssuesTime(issues.additional, totalTime);
   const totalTechDebtTaskDays = getIssuesTime(issues['tech-debt'], totalTime);
   const totalTechDebtInPercentage = getTimePercentages(totalTechDebtTaskDays, totalTime);
-  const totalBugsAndP1sTaskDays = getIssuesTime([...issues.bug, ...issues.p1], totalTime);
+  const bugs = issues.bug || [];
+  const p1 = issues.p1 || [];
+  const totalBugsAndP1sTaskDays = getIssuesTime([...bugs, ...p1], totalTime);
   const totalBugsAndP1sInPercentage = getTimePercentages(totalBugsAndP1sTaskDays, totalTime);
 
   return [{
@@ -239,10 +235,10 @@ async function main() {
   let additionalSprintData;
   if (reportType === SPRINT_REPORT) {
     additionalSprintData = getAdditionalSprintData(issuesByType, reportType, totalTime);
+    writeAdditionalDataToCsv(additionalSprintData);
   }
 
   writeIssuesToCsv(issuesByType, reportType, totalTime);
-  writeAdditionalDataToCsv(additionalSprintData);
 }
 
 main();
