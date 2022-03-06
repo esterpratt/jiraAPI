@@ -17,32 +17,27 @@ const SUB_TASK = 'sub-task';
 const NOT_FOR_REPORT = 'not-for-report';
 const UNFINISHED = 'unfinished';
 
-function createIssue(relevantLabel, issuetype, parent, epic, key, summary, assignee,
-  originalEstimate, timeSpent, labels) {
+function createIssue(relevantLabel, issueType, parent, epic, key, summary, assignee, labels) {
+  const unFinished = labels.find((label) => label === UNFINISHED);
   return {
-    type: relevantLabel ? relevantLabel.toLowerCase() : issuetype.name.toLowerCase(),
+    type: relevantLabel ? relevantLabel.toLowerCase() : issueType.name.toLowerCase(),
     parentKey: parent && parent.key,
     epic: epic && `${epic.key} - ${epic.summary}`,
     key,
     summary,
     name: assignee ? assignee.displayName : 'N/A',
-    originalEstimate,
-    calculatedTime: timeSpent ? +timeSpent.slice(0, timeSpent.length - 1) : 0,
     isStretch: labels.find((label) => label === STRETCH),
+    isFinished: !unFinished,
   };
 }
 
 function mapIssues(issues) {
   return issues.map((issue) => {
     const { key, fields } = issue;
-    const {
-      epic, parent, summary, issuetype: issueType, labels, assignee, timetracking,
-    } = fields;
-    const { originalEstimate, timeSpent } = timetracking;
+    const { epic, parent, summary, issuetype: issueType, labels, assignee } = fields;
     const relevantLabel = relevantLabels.find((label) => labels.find((l) => l.toLowerCase()
     .includes(label.toLowerCase())));
-    return createIssue(relevantLabel, issueType, parent, epic, key, summary, assignee,
-      originalEstimate, timeSpent, labels);
+    return createIssue(relevantLabel, issueType, parent, epic, key, summary, assignee, labels);
   });
 }
 
@@ -52,11 +47,11 @@ function getSortedIssuesByEpic(issues) {
   });
 }
 
-function arrangeIssues(issues, reportType, totalTime) {
-  return issues.map(issue => getFinalIssue(issue, reportType, totalTime));
+function arrangeIssues(issues, reportType) {
+  return issues.map(issue => getFinalIssue(issue, reportType));
 }
 
-function writeIssuesToCsv(issuesByType, reportType, totalTime) {
+function writeIssuesToCsv(issuesByType, reportType) {
   fs.ensureDir('export', { recursive: true }, (err) => {
     if (err) {
       console.error(err);
@@ -64,7 +59,7 @@ function writeIssuesToCsv(issuesByType, reportType, totalTime) {
     }
     Object.keys(issuesByType).forEach((type) => {
       const issues = issuesByType[type];
-      const arrangedIssues = arrangeIssues(issues, reportType, totalTime);
+      const arrangedIssues = arrangeIssues(issues, reportType);
       const sortedIssues = getSortedIssuesByEpic(arrangedIssues);
       const ws = fs.createWriteStream(`export/${type}.csv`);
       fastcsv.write(sortedIssues, { headers: true }).on('finish', () => console.info(`Write ${type} to CSV successfully!`))
@@ -103,7 +98,7 @@ function askQuestion(question) {
 }
 
 async function getReportType() {
-  const ans = await askQuestion('What report to you want to get? Sprint report (S) or Planning report (P)? ');
+  const ans = await askQuestion('What report do you want to get? Sprint report (S) or Planning report (P)? ');
   if (ans === 'S') return SPRINT_REPORT;
   return PLANNING;
 }
@@ -117,16 +112,14 @@ function getTimePercentages(time, totalTime) {
   return Math.round((time / totalTime) * 100);
 }
 
-function getSprintIssue(issue, totalTime) {
-  const time = issue.calculatedTime;
+function getSprintIssue(issue) {
   return {
     summary: issue.summary,
     key: issue.key,
-    name: issue.name,
-    time: `${time}d`,
-    percentage: `${getTimePercentages(time, totalTime)}%`,
-    comments: issue.isStretch ? 'stretch' : '',
     epic: issue.epic,
+    name: issue.name,
+    finished: issue.isFinished ? 'V' : 'X',
+    shouldHaveFinished: issue.isFinished && !issue.isStretch ? 'V' : 'X',
   };
 }
 
@@ -134,21 +127,15 @@ function getPlanningIssue(issue) {
   return {
     summary: issue.summary,
     key: issue.key,
-    name: issue.name,
-    estimation: issue.originalEstimate,
-    comments: issue.isStretch ? 'stretch' : '',
-    estimatedDelivery: issue.isStretch ? 'Next Sprint' : 'This Sprint',
     epic: issue.epic,
+    name: issue.name,
+    estimatedDelivery: issue.isStretch ? 'Next Sprint' : 'This Sprint',
   };
 }
 
-function getFinalIssue(issue, reportType, totalTime) {
-  if (reportType === SPRINT_REPORT) return getSprintIssue(issue, totalTime);
+function getFinalIssue(issue, reportType) {
+  if (reportType === SPRINT_REPORT) return getSprintIssue(issue);
   else return getPlanningIssue(issue);
-}
-
-function getTotalTime(issues) {
-  return issues.reduce((acc, issue) => acc + issue.calculatedTime, 0);
 }
 
 function getIssuesByType(issues) {
@@ -179,21 +166,10 @@ function getIssuesTime(issues = []) {
   }, 0);
 }
 
-function getAdditionalSprintData(issues, reportType, totalTime) {
-  const totalUnplannedTaskDays = getIssuesTime(issues.additional, totalTime);
-  const totalTechDebtTaskDays = getIssuesTime(issues['tech-debt'], totalTime);
-  const totalTechDebtInPercentage = getTimePercentages(totalTechDebtTaskDays, totalTime);
-  const bugs = issues.bug || [];
-  const p1 = issues.p1 || [];
-  const totalBugsAndP1sTaskDays = getIssuesTime([...bugs, ...p1], totalTime);
-  const totalBugsAndP1sInPercentage = getTimePercentages(totalBugsAndP1sTaskDays, totalTime);
-
+function getAdditionalSprintData(issues) {
   return [{
-    totalDevDays: `${totalTime.toFixed(1)}d`,
-    unplannedTaskDays: `${totalUnplannedTaskDays}d`,
-    techDebtPercentage: `${totalTechDebtInPercentage}%`,
-    bugsAndP1sPercentage: `${totalBugsAndP1sInPercentage}%`,
-    productTasksPercentage: `${100 - totalTechDebtInPercentage - totalBugsAndP1sInPercentage}%`,
+    totalAdditionalTasks: (issues.additional || []).length,
+    totalP1Tasls: (issues.p1 || []).length,
   }];
 }
 
@@ -217,28 +193,15 @@ async function main() {
 
   const mappedIssues = mapIssues(issuesForReport);
 
-  // add sub-tasks log work to its parent log work
-  mappedIssues.forEach((issue) => {
-    if (issue.type === SUB_TASK) {
-      const parentIssue = mappedIssues.find((i) => i.key === issue.parentKey);
-      if (parentIssue) parentIssue.calculatedTime += issue.calculatedTime;
-    }
-  });
-
-  let totalTime = 0;
-  if (reportType === SPRINT_REPORT) {
-    totalTime = getTotalTime(mappedIssues);
-  }
-
-  const issuesByType = getIssuesByType(mappedIssues, reportType, totalTime);
+  const issuesByType = getIssuesByType(mappedIssues);
 
   let additionalSprintData;
   if (reportType === SPRINT_REPORT) {
-    additionalSprintData = getAdditionalSprintData(issuesByType, reportType, totalTime);
+    additionalSprintData = getAdditionalSprintData(issuesByType, reportType);
     writeAdditionalDataToCsv(additionalSprintData);
   }
 
-  writeIssuesToCsv(issuesByType, reportType, totalTime);
+  writeIssuesToCsv(issuesByType, reportType);
 }
 
 main();
