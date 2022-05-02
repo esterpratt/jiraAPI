@@ -9,7 +9,8 @@ const possibleFields = ['epic', 'parent', 'summary', 'key', 'status', 'issuetype
 const relevantTypes = {
   bug: 'bug', story: 'story', task: 'story', 'tech-debt': 'tech-debt', p1: 'p1', additional: 'additional',
 };
-const relevantLabels = ['tech-debt', 'p1', 'additional'];
+const relevantLabels = ['tech-debt', 'p1', 'additional', 'unplanned'];
+const additionalLabels = ['additional', 'unplanned'];
 const STRETCH = 'stretch';
 const PLANNING = 'planning';
 const SPRINT_REPORT = 'report';
@@ -19,8 +20,18 @@ const UNFINISHED = 'unfinished';
 
 function createIssue(relevantLabel, issueType, parent, epic, key, summary, assignee, labels) {
   const unFinished = labels.find((label) => label === UNFINISHED);
+
+  let type;
+  if (!relevantLabel) {
+    type = issueType.name.toLowerCase();
+  } else if (additionalLabels.includes(relevantLabel)) {
+    type = relevantTypes.additional;
+  } else {
+    type = relevantLabel;
+  }
+
   return {
-    type: relevantLabel ? relevantLabel.toLowerCase() : issueType.name.toLowerCase(),
+    type,
     parentKey: parent && parent.key,
     epic: epic && `${epic.key} - ${epic.summary}`,
     key,
@@ -36,7 +47,7 @@ function mapIssues(issues) {
     const { key, fields } = issue;
     const { epic, parent, summary, issuetype: issueType, labels, assignee } = fields;
     const relevantLabel = relevantLabels.find((label) => labels.find((l) => l.toLowerCase()
-    .includes(label.toLowerCase())));
+    .startsWith(label.toLowerCase())));
     return createIssue(relevantLabel, issueType, parent, epic, key, summary, assignee, labels);
   });
 }
@@ -168,9 +179,13 @@ function getIssuesTime(issues = []) {
 
 function getAdditionalSprintData(issues) {
   return [{
-    totalAdditionalTasks: (issues.additional || []).length,
-    totalP1Tasls: (issues.p1 || []).length,
+    'total Additional Tasks': (issues.additional || []).length,
+    'total P1 Tasks': (issues.p1 || []).length,
   }];
+}
+
+function sortIssues(issueA, issueB) {
+  return issueA.epic?.localeCompare(issueB.epic)
 }
 
 async function main() {
@@ -193,15 +208,28 @@ async function main() {
 
   const mappedIssues = mapIssues(issuesForReport);
 
-  const issuesByType = getIssuesByType(mappedIssues);
+  const sortedIssues = mappedIssues.sort(sortIssues);
+
+  const issuesByType = getIssuesByType(sortedIssues);
 
   let additionalSprintData;
   if (reportType === SPRINT_REPORT) {
     additionalSprintData = getAdditionalSprintData(issuesByType, reportType);
-    writeAdditionalDataToCsv(additionalSprintData);
-  }
 
-  writeIssuesToCsv(issuesByType, reportType);
+    const relevantForSprintReportTypes = ['p1', 'additional'];
+
+    const filteredIssues = Object.keys(issuesByType)
+      .filter(key => relevantForSprintReportTypes.includes(key))
+      .reduce((obj, key) => {
+        obj[key] = issuesByType[key];
+        return obj;
+      }, {});
+
+    writeAdditionalDataToCsv(additionalSprintData);
+    writeIssuesToCsv(filteredIssues, reportType);
+  } else {
+    writeIssuesToCsv(issuesByType, reportType);
+  }
 }
 
 main();
